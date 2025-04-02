@@ -1,4 +1,4 @@
-name: Web Build + Deployment to GitHub Pages
+name: Flask App Deployment
 
 on:
   push:
@@ -7,18 +7,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
 env:
-  BUILD_NUMBER: 1
-  BUILD_VERSION: 1.0.0
-  PYTHON_VERSION: "3.11"  # Changed to 3.11 as requested
-  FLET_CLI_VERSION: 0.27.5
-  PYTHONUTF8: 1
-  FLET_CLI_NO_RICH_OUTPUT: 1
-  UV_NO_PROGRESS: 1
+  PYTHON_VERSION: "3.11"
+  FLASK_APP: "dtbs.py"
 
 jobs:
   build:
@@ -32,50 +23,46 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
-        cache: 'pip'  # Added caching for faster builds
+        cache: 'pip'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install flet-cli==$FLET_CLI_VERSION flet
-        # Add any other dependencies your project needs here
+        pip install flask gunicorn sqlite3
 
-    - name: Verify Python version
-      run: python --version
-
-    - name: Build Flet web app
+    - name: Initialize database
       run: |
-        echo "Building Flet web app from dtbs.py..."
-        echo "Repository: $GITHUB_REPOSITORY"
-        echo "Base URL: ${GITHUB_REPOSITORY#*/}"
-        flet build web \
-          --base-url ${GITHUB_REPOSITORY#*/} \
-          --route-url-strategy hash \
-          --module-name dtbs \
-          --build-version $BUILD_VERSION \
-          --build-number $BUILD_NUMBER
+        python -c "from dtbs import init_db; init_db()"
 
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        name: flet-web-app
-        path: build/web
+    - name: Test Flask app
+      run: |
+        python -m flask run &
+        sleep 5
+        curl http://localhost:5000
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
+    
     steps:
-    - name: Setup Pages
-      uses: actions/configure-pages@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-    - name: Deploy to GitHub Pages
+    - name: Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install flask gunicorn
+
+    - name: Deploy to Render
       if: github.event_name == 'push'
-      id: deployment
-      uses: actions/deploy-pages@v4
+      env:
+        RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      run: |
+        curl -s -X POST "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+          -H "Authorization: Bearer $RENDER_API_KEY" \
+          -H "Accept: application/json"
